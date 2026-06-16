@@ -1,262 +1,74 @@
-// FB Group Post Wiper — content script (engine v2)
+// Group Post Wiper — content script (DOM engine)
 // Runs inside facebook.com/groups/* pages.
 //
-// Strategy (see README "How it works"):
-//   1. Harvest the current top of the group feed via GraphQL (read-only, fast).
-//   2. Delete each post via the same GraphQL mutation Facebook's own UI fires,
-//      ONE AT A TIME with human-like jitter (protects the account).
-//   3. Deleting advances the feed window, so we re-harvest the new top and
-//      repeat — we never need to scroll back to 2014; the feed refills from the
-//      oldest remaining posts each round.
-//   4. If a post resists the admin mutation (own posts / odd story types), we
-//      fall back to clicking it through the real menu (DOM), exactly like a human.
-//   5. Tokens (fb_dtsg) are re-read every round because Facebook rotates them.
-//   6. Everything is logged to chrome.storage so a multi-day run is resumable
-//      and auditable.
+// Why DOM and not the private GraphQL API:
+//   • The group feed's posts are delivered by Facebook's route/SSR query, which a
+//     standalone pagination call can't reproduce — so a "just ask GraphQL for the
+//     posts" harvester returns an empty feed. Facebook reliably *renders* the posts,
+//     though, so the DOM is the dependable source of truth.
+//   • Deleting through the real post menu uses the same affordance a human does. It
+//     works for every post type and for both your own posts ("Delete post") and
+//     other members' posts ("Remove post"), and it doesn't depend on internal
+//     doc_ids that Facebook rotates — so it keeps working over time.
+//
+// Strategy (proven on a 7.9k-member group with a decade of history):
+//   1. Delete the top visible post via its menu, with polling (no fixed-timing races).
+//   2. When nothing is left in view, scroll to load more.
+//   3. When a whole pass deletes nothing, reload the page — Facebook re-renders the
+//      feed from the server, surfacing the next-oldest posts. Repeat.
+//   4. After a couple of consecutive empty passes, the group is clear → done.
+//   Progress + the empty-pass counter are persisted, so multi-day runs resume
+//   cleanly across reloads and browser restarts.
 
 (() => {
 'use strict';
 
-// ─── Constants captured from Facebook's own traffic ─────────────────────────
-
-const DOC_FEED   = '36136119256033316';                       // GroupsCometFeedRegularStoriesPaginationQuery
-const NAME_FEED  = 'GroupsCometFeedRegularStoriesPaginationQuery';
-const DOC_DELETE = '24487184117551286';                       // useGroupRemovePostAsAdminMutation
-const NAME_DELETE = 'useGroupRemovePostAsAdminMutation';
-
+// ─── Storage keys ────────────────────────────────────────────────────────────
 const STORAGE_KEY = 'fbwiper';
-const SKIP_KEY    = 'fbwiper_skip';   // story ids that resisted every method
-const LOG_KEY     = 'fbwiper_log';    // rolling audit log
+const LOG_KEY     = 'fbwiper_log';
+const SPEED_KEY   = 'fbwiper_speed';
 
-// Pacing (ms). Jittered so the cadence looks human, not robotic.
-const DELETE_MIN_GAP = 2600;
-const DELETE_MAX_GAP = 4200;
-const ROUND_GAP      = 2500;          // pause between harvest rounds
-const HARVEST_COUNT  = 30;            // posts requested per harvest
-const EMPTY_ROUNDS_TO_STOP = 3;       // consecutive empty harvests => done
-const MAX_BACKOFF    = 5 * 60 * 1000; // 5 min cap on rate-limit backoff
-
-const RELAY_PROVIDERS = {
-  '__relay_internal__pv__GHLShouldChangeAdIdFieldNamerelayprovider': true,
-  '__relay_internal__pv__GHLShouldChangeSponsoredDataFieldNamerelayprovider': true,
-  '__relay_internal__pv__CometFeedStory_enable_reactor_facepilerelayprovider': false,
-  '__relay_internal__pv__CometFeedStory_enable_social_bubblesrelayprovider': false,
-  '__relay_internal__pv__CometFeedStory_enable_post_permalink_white_space_clickrelayprovider': false,
-  '__relay_internal__pv__CometUFICommentActionLinksRewriteEnabledrelayprovider': false,
-  '__relay_internal__pv__CometUFICommentAvatarStickerAnimatedImagerelayprovider': false,
-  '__relay_internal__pv__IsWorkUserrelayprovider': false,
-  '__relay_internal__pv__TestPilotShouldIncludeDemoAdUseCaserelayprovider': false,
-  '__relay_internal__pv__FBReels_deprecate_short_form_video_context_gkrelayprovider': true,
-  '__relay_internal__pv__FBReels_enable_view_dubbed_audio_type_gkrelayprovider': true,
-  '__relay_internal__pv__CometFeedShareMedia_shouldPrefetchShareImagerelayprovider': false,
-  '__relay_internal__pv__CometImmersivePhotoCanUserDisable3DMotionrelayprovider': false,
-  '__relay_internal__pv__WorkCometIsEmployeeGKProviderrelayprovider': false,
-  '__relay_internal__pv__IsMergQAPollsrelayprovider': false,
-  '__relay_internal__pv__FBReelsMediaFooter_comet_enable_reels_ads_gkrelayprovider': true,
-  '__relay_internal__pv__CometUFIReactionsEnableShortNamerelayprovider': false,
-  '__relay_internal__pv__CometUFICommentAutoTranslationTyperelayprovider': 'ORIGINAL',
-  '__relay_internal__pv__CometUFIShareActionMigrationrelayprovider': true,
-  '__relay_internal__pv__CometUFISingleLineUFIrelayprovider': false,
-  '__relay_internal__pv__relay_provider_comet_ufi_ssr_seo_deferrelayprovider': true,
-  '__relay_internal__pv__CometUFI_dedicated_comment_routable_dialog_gkrelayprovider': true,
-  '__relay_internal__pv__ReelsIFUCard_reelsIFULikeCountrelayprovider': false,
-  '__relay_internal__pv__FBReelsIFUTileContent_reelsIFUPlayOnHoverrelayprovider': true,
-  '__relay_internal__pv__GroupsCometGYSJFeedItemHeightrelayprovider': 206,
-  '__relay_internal__pv__ShouldEnableBakedInTextStoriesrelayprovider': false,
-  '__relay_internal__pv__StoriesShouldIncludeFbNotesrelayprovider': false,
+// ─── Tunables ────────────────────────────────────────────────────────────────
+const SPEED_PROFILES = {           // gap between deletes (ms), jittered → human cadence
+  safe:     { min: 4200, max: 6800 },
+  balanced: { min: 2600, max: 4200 },
+  fast:     { min: 1200, max: 2300 },
 };
+const MAX_SCROLL_STRIKES   = 10;   // consecutive scrolls with NO new content before a pass ends
+const MAX_SCROLLS_PER_PASS = 22;   // hard cap so a pass always ends and RELOADS (reload = "find more")
+const EMPTY_PASSES_TO_STOP = 5;    // consecutive deep-scrolled+reloaded empty passes ⇒ truly clear
+const STUCK_PASSES_LIMIT   = 6;    // zero-delete-but-failing passes before pausing for the user
+const SCROLL_GAP           = 2600; // ms to wait after a scroll for lazy content
+const MENU_TIMEOUT         = 7000; // ms to wait for menu / dialog to appear
+const POST_RELOAD_SETTLE   = 4000; // ms to let the feed render after a reload
+const FAIL_BACKOFF_STEP    = 2500; // ms added to the gap per consecutive failure (rate-limit)
+const FAIL_BACKOFF_MAX     = 30000;// cap on the adaptive backoff
 
 // ─── Runtime state ──────────────────────────────────────────────────────────
-
 const S = {
   running: false,
+  done: false,
   deleted: 0,
-  sessionDeleted: 0,
-  mutationSeq: 100,
-  skip: new Set(),
+  emptyPasses: 0,    // consecutive passes that found nothing removable
+  stuckPasses: 0,    // consecutive passes that deleted 0 but hit failures (rate-limit)
+  passDeleted: 0,
+  passFailures: 0,
+  failBackoff: 0,    // adaptive extra delay while Facebook is pushing back
   lastError: '',
+  gapMin: SPEED_PROFILES.balanced.min,
+  gapMax: SPEED_PROFILES.balanced.max,
 };
 
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-const jitter = (min, max) => Math.floor(min + Math.random() * (max - min));
+const sleep  = ms => new Promise(r => setTimeout(r, ms));
+const jitter = (a, b) => Math.floor(a + Math.random() * (b - a));
 
-// ─── Token extraction (re-read each round — fb_dtsg rotates) ────────────────
-
-function readTokens() {
-  const scriptText = () => Array.from(document.querySelectorAll('script')).map(s => s.textContent);
-
-  let dtsg = document.querySelector('[name="fb_dtsg"]')?.value || null;
-  let lsd  = null;
-  if (!dtsg || !lsd) {
-    for (const t of scriptText()) {
-      if (!dtsg) { const m = t.match(/"DTSGInitialData",\[\],\{"token":"([^"]+)"/); if (m) dtsg = m[1]; }
-      if (!lsd)  { const m = t.match(/"LSD",\[\],\{"token":"([^"]+)"/);            if (m) lsd  = m[1]; }
-      if (dtsg && lsd) break;
-    }
-  }
-
-  const cuser = document.cookie.split(';').map(c => c.trim())
-    .find(c => c.startsWith('c_user='))?.split('=')[1] || null;
-
-  // Numeric group id — try several patterns, then fall back to URL slug resolve.
-  let groupId = null;
-  for (const t of scriptText()) {
-    const m = t.match(/"groupID":"(\d+)"/) || t.match(/"group_id":"(\d+)"/)
-           || t.match(/\\"group_id\\":\\"(\d+)\\"/) || t.match(/"GroupCometID","(\d+)"/);
-    if (m) { groupId = m[1]; break; }
-  }
-
-  return { dtsg, lsd, cuser, groupId };
+function applySpeed(profile) {
+  const p = SPEED_PROFILES[profile] || SPEED_PROFILES.balanced;
+  S.gapMin = p.min; S.gapMax = p.max;
 }
 
-// ─── GraphQL POST (uses the page's own session/cookies) ─────────────────────
-
-async function graphql(apiName, docId, variables, tok) {
-  const body = new URLSearchParams({
-    av: tok.cuser, __user: tok.cuser, __a: '1',
-    fb_dtsg: tok.dtsg, lsd: tok.lsd,
-    fb_api_caller_class: 'RelayModern',
-    fb_api_req_friendly_name: apiName,
-    variables: JSON.stringify(variables),
-    server_timestamps: 'true',
-    doc_id: docId,
-  }).toString();
-
-  const res = await fetch('/api/graphql/', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/x-www-form-urlencoded',
-      'x-fb-friendly-name': apiName,
-      'x-fb-lsd': tok.lsd,
-    },
-    body,
-    credentials: 'include',
-  });
-
-  const text = await res.text();
-  // FB sometimes prefixes "for (;;);" anti-JSON-hijack guard.
-  const clean = text.replace(/^for \(;;\);/, '').split('\n')[0];
-  return JSON.parse(clean);
-}
-
-// ─── Story-id helpers ────────────────────────────────────────────────────────
-// A real post's feed node id base64-decodes to "S:_I{authorId}:VK:{postId}".
-
-function decodeStory(nodeId) {
-  if (!nodeId || typeof nodeId !== 'string') return null;
-  let decoded;
-  try { decoded = atob(nodeId); } catch { return null; }
-  const m = decoded.match(/:_[A-Za-z]?(\d+):VK:(\d+)/) || decoded.match(/(\d{6,}):VK:(\d{6,})/);
-  if (!m) return null;
-  return { storyId: nodeId, authorId: m[1], postId: m[2] };
-}
-
-const NON_POST_UNIT = /(SectionHeader|Recommendation|PeopleYouMayKnow|Pymk|Suggested|Ad$|AdUnit|Survey|Bloks|Notif)/i;
-
-// ─── Harvest: read the current top of the feed, return deletable posts ───────
-
-async function harvest(tok) {
-  const variables = {
-    count: HARVEST_COUNT,
-    feedLocation: 'GROUP', feedType: 'DISCUSSION', feedbackSource: 0,
-    filterTopicId: null, focusCommentID: null,
-    privacySelectorRenderLocation: 'COMET_STREAM', referringStoryRenderLocation: null,
-    renderLocation: 'group', scale: 1, sortingSetting: 'CHRONOLOGICAL',
-    stream_initial_count: 1, useDefaultActor: false, id: tok.groupId,
-    ...RELAY_PROVIDERS,
-  };
-
-  let resp;
-  try {
-    resp = await graphql(NAME_FEED, DOC_FEED, variables, tok);
-  } catch (e) {
-    // Some groups reject CHRONOLOGICAL — retry with the default sort once.
-    variables.sortingSetting = 'TOP_POSTS';
-    resp = await graphql(NAME_FEED, DOC_FEED, variables, tok);
-  }
-
-  if (resp.errors) { S.lastError = 'feed: ' + (resp.errors[0]?.message || 'error'); }
-
-  const feed = resp?.data?.node?.group_feed;
-  const edges = feed?.edges || [];
-
-  const posts = [];
-  for (const e of edges) {
-    const n = e?.node;
-    if (!n) continue;
-    if (NON_POST_UNIT.test(n.__typename || '')) continue;
-
-    // Primary: decode the node id.
-    let info = decodeStory(n.id);
-
-    // Fallback: some units wrap the real story one level down.
-    if (!info && n.comet_sections) {
-      const buried = findEncodedId(n);
-      if (buried) info = decodeStory(buried);
-    }
-
-    if (info && !S.skip.has(info.storyId)) posts.push(info);
-  }
-  return posts;
-}
-
-// Depth-limited search for a base64 story id anywhere in a node subtree.
-function findEncodedId(obj, depth = 0) {
-  if (!obj || typeof obj !== 'object' || depth > 5) return null;
-  for (const [k, v] of Object.entries(obj)) {
-    if (k === 'id' && typeof v === 'string' && decodeStory(v)) return v;
-    if (v && typeof v === 'object') {
-      const r = findEncodedId(v, depth + 1);
-      if (r) return r;
-    }
-  }
-  return null;
-}
-
-// ─── Delete one post via the admin-remove GraphQL mutation ──────────────────
-
-async function deleteViaGraphQL(post, tok) {
-  S.mutationSeq += 1;
-  const variables = {
-    input: {
-      actor_id: tok.cuser,
-      client_mutation_id: String(S.mutationSeq),
-      admin_notes: '',
-      group_id: tok.groupId,
-      selected_rules: [],
-      send_warning: false,
-      share_feedback: false,
-      source: 'group_mall',
-      story_id: post.storyId,
-    },
-    profileID: post.authorId,
-  };
-
-  let resp;
-  try {
-    resp = await graphql(NAME_DELETE, DOC_DELETE, variables, tok);
-  } catch (e) {
-    S.lastError = 'del-net: ' + e.message;
-    return { ok: false, rateLimited: /1357054|limit|temporar/i.test(e.message) };
-  }
-
-  if (resp.errors && resp.errors.length) {
-    const msg = resp.errors[0]?.message || JSON.stringify(resp.errors[0] || {});
-    S.lastError = 'del: ' + msg.slice(0, 80);
-    return { ok: false, rateLimited: /1357054|temporar|too many|rate/i.test(msg) };
-  }
-
-  // A successful admin-remove returns a mutation payload (not strictly checked —
-  // absence of errors + HTTP 200 is FB's success signal here).
-  return { ok: true };
-}
-
-// ─── DOM fallback: delete the first visible post like a human would ─────────
-// Used when GraphQL rejects a post type. Uses POLLING (waitFor) instead of
-// fixed sleeps — this is what fixes the original "skips because menu wasn't
-// ready yet" bug.
-
-function waitFor(fn, timeout = 6000, step = 200) {
+// Poll a predicate until it returns truthy or the timeout elapses.
+function waitFor(fn, timeout = MENU_TIMEOUT, step = 180) {
   return new Promise(resolve => {
     const t0 = Date.now();
     const tick = () => {
@@ -270,54 +82,15 @@ function waitFor(fn, timeout = 6000, step = 200) {
   });
 }
 
-async function deleteViaDOM() {
-  const menuBtn = document.querySelector('[aria-label^="Actions for this post"]:not([data-wiper-tried])');
-  if (!menuBtn) return { ok: false, exhausted: true };
-
-  menuBtn.setAttribute('data-wiper-tried', '1');
-  menuBtn.scrollIntoView({ block: 'center' });
-  menuBtn.click();
-
-  // Wait until the menu actually renders its items.
-  const removeItem = await waitFor(() => {
-    const items = Array.from(document.querySelectorAll('[role=menuitem]'));
-    return items.find(m =>
-      /Remove post|Delete post|إزالة المنشور|حذف المنشور/.test(m.textContent)
-    ) || null;
-  });
-
-  if (!removeItem) {
-    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-    return { ok: false };
-  }
-
-  removeItem.click();
-
-  // Wait for the confirm dialog.
-  const confirmBtn = await waitFor(() => {
-    const btns = Array.from(document.querySelectorAll('[role=dialog] [role=button], [role=dialog] button'));
-    return btns.find(b => /^(Confirm|تأكيد)$/.test(b.textContent.trim())) || null;
-  });
-
-  if (!confirmBtn) {
-    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-    return { ok: false };
-  }
-
-  confirmBtn.click();
-
-  // Wait until the dialog closes (= deletion accepted).
-  const closed = await waitFor(() => !document.querySelector('[role=dialog]') ? true : null, 6000);
-  return { ok: !!closed };
-}
-
-// ─── Persistence + logging ──────────────────────────────────────────────────
-
+// ─── Persistence + logging ───────────────────────────────────────────────────
 function save() {
   return new Promise(res => {
     chrome.storage.local.set({
-      [STORAGE_KEY]: { running: S.running, deleted: S.deleted, lastUpdate: Date.now(), lastError: S.lastError },
-      [SKIP_KEY]: Array.from(S.skip),
+      [STORAGE_KEY]: {
+        running: S.running, done: S.done, deleted: S.deleted,
+        emptyPasses: S.emptyPasses, stuckPasses: S.stuckPasses,
+        lastUpdate: Date.now(), lastError: S.lastError,
+      },
     }, res);
   });
 }
@@ -331,185 +104,243 @@ function logLine(text) {
   });
 }
 
-function notify(type, extra = {}) {
-  chrome.runtime.sendMessage({ type, deleted: S.deleted, sessionDeleted: S.sessionDeleted, lastError: S.lastError, ...extra }).catch(() => {});
+function notify(type) {
+  chrome.runtime.sendMessage({ type, deleted: S.deleted, lastError: S.lastError }).catch(() => {});
 }
 
-// ─── Main loop ───────────────────────────────────────────────────────────────
+// ─── Delete one post through its menu (polling, no fixed-timing races) ────────
+// Returns true only if the confirm dialog actually closed (= deletion accepted).
+function closeMenus() {
+  document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  document.body.dispatchEvent(new KeyboardEvent('keyup',   { key: 'Escape', bubbles: true }));
+}
 
-async function mainLoop() {
-  let emptyRounds = 0;          // consecutive harvests that yielded nothing
-  let backoff = 0;             // rate-limit backoff (ms)
-  let consecutiveFail = 0;     // consecutive delete failures (token-staleness signal)
-  let deletedSinceReload = 0;  // periodic reload counter (refreshes fb_dtsg)
-  let tokenMisses = 0;
+const REMOVE_RE = /Remove post|Delete post|إزالة المنشور|حذف المنشور/;
 
-  S.running = true;
-  await save();                // persist running:true so a reload auto-resumes
-  logLine(`▶ started (already deleted ${S.deleted})`);
-  notify('PROGRESS');
+// Open the post menu and wait for it to render. We first wait for the menu to
+// appear at all, then keep polling for the Remove/Delete item — Facebook renders
+// menu items progressively, so reading too early makes real posts look like
+// undeletable system posts. A single click only (re-clicking toggles it shut).
+async function openMenuFindRemove(btn) {
+  btn.click();
 
-  // Reload helper — saves first so auto-resume continues after navigation.
-  async function reloadToRefresh(reason) {
-    logLine(`↻ reload (${reason})`);
-    await save();
-    await sleep(800);
-    location.reload();
+  // 1) wait for the menu to open at all
+  const opened = await waitFor(() =>
+    document.querySelectorAll('[role=menuitem]').length ? true : null, 5000);
+  if (!opened) return { item: null, menuOpened: false };
+
+  // 2) wait for the Remove/Delete item specifically (it can render late)
+  const item = await waitFor(() => {
+    const items = Array.from(document.querySelectorAll('[role=menuitem]'));
+    return items.find(m => REMOVE_RE.test(m.textContent)) || null;
+  }, 6000);
+
+  return { item: item || null, menuOpened: true };
+}
+
+async function deleteTopPost() {
+  const btn = document.querySelector('[aria-label^="Actions for this post"]:not([data-wiper-tried])');
+  if (!btn) return { ok: false, none: true };
+
+  btn.setAttribute('data-wiper-tried', '1');     // don't re-pick this node within the pass
+
+  const { item: removeItem, menuOpened } = await openMenuFindRemove(btn);
+
+  if (!removeItem) {
+    closeMenus();
+    // Menu opened but has no remove/delete option → a system post (group
+    // created, renamed, members joined, pinned announcement). Skip it.
+    return { ok: false, reason: menuOpened ? 'system-post' : 'menu-did-not-open' };
   }
+
+  removeItem.click();
+
+  // Wait for the confirm dialog, then click its confirm button.
+  const confirmBtn = await waitFor(() => {
+    const dlg = document.querySelector('[role=dialog]');
+    if (!dlg) return null;
+    const btns = Array.from(dlg.querySelectorAll('[role=button], button'));
+    return btns.find(b => /^(Confirm|Delete|Remove|تأكيد|حذف|إزالة)$/.test(b.textContent.trim())) || null;
+  }, 6000);
+
+  if (!confirmBtn) { closeMenus(); return { ok: false, reason: 'no-confirm' }; }
+  confirmBtn.click();
+
+  // Deletion is accepted once the dialog closes.
+  const closed = await waitFor(() => document.querySelector('[role=dialog]') ? null : true, 8000);
+  if (!closed) { closeMenus(); return { ok: false, reason: 'dialog-stayed-open' }; }
+  return { ok: true };
+}
+
+// ─── One pass = delete everything renderable on this page load ────────────────
+async function runPass() {
+  S.passDeleted = 0;
+  S.passFailures = 0;
+  let scrollStrikes = 0;
+  let totalScrolls = 0;
+  let consecutiveFails = 0;
 
   while (S.running) {
-    const tok = readTokens();
-    if (!tok.dtsg || !tok.cuser || !tok.groupId) {
-      tokenMisses++;
-      S.lastError = 'Reading page… (reload the group if this persists)';
-      logLine(`✗ missing tokens (${tokenMisses})`);
-      notify('PROGRESS');
-      if (tokenMisses >= 4) { await reloadToRefresh('token read failed'); return; }
-      await sleep(6000);
-      continue;
-    }
-    tokenMisses = 0;
+    const res = await deleteTopPost();
 
-    // 1) Harvest current top of feed (GraphQL, authoritative).
-    let posts = [];
-    try {
-      posts = await harvest(tok);
-    } catch (e) {
-      S.lastError = 'harvest: ' + e.message;
-      logLine('✗ harvest failed: ' + e.message.slice(0, 60));
-      consecutiveFail++;
-      if (consecutiveFail >= 5) { await reloadToRefresh('harvest errors'); return; }
-      await sleep(6000);
+    if (res.ok) {
+      S.deleted++; S.passDeleted++;
+      consecutiveFails = 0; scrollStrikes = 0;
+      S.failBackoff = Math.max(0, S.failBackoff - FAIL_BACKOFF_STEP); // recover speed
+      S.lastError = '';
+      logLine(`🗑 deleted (total ${S.deleted})`);
+      await save(); notify('PROGRESS');
+      await sleep(jitter(S.gapMin, S.gapMax) + S.failBackoff);
       continue;
     }
 
-    if (posts.length === 0) {
-      // GraphQL sees nothing deletable. Give the DOM one chance — a post type
-      // GraphQL can't parse might still be visible and clickable.
-      const domResult = await deleteViaDOM();
-      if (domResult.ok) {
-        S.deleted++; S.sessionDeleted++; deletedSinceReload++;
-        emptyRounds = 0; consecutiveFail = 0;
-        logLine(`🗑 dom-deleted (total ${S.deleted})`);
-        await save(); notify('PROGRESS');
-        await sleep(jitter(DELETE_MIN_GAP, DELETE_MAX_GAP));
-        continue;
-      }
+    if (res.none) {
+      // Nothing untried in view — scroll to pull in more (older) posts. Keep
+      // going as long as the page is still growing or new posts appear; only
+      // count a "strike" when a scroll loads nothing new. This drains the whole
+      // feed depth before a pass concludes it's empty.
+      const beforeH = document.documentElement.scrollHeight;
+      const beforeN = document.querySelectorAll('[aria-label^="Actions for this post"]:not([data-wiper-tried])').length;
 
-      emptyRounds++;
-      logLine(`· empty ${emptyRounds}/${EMPTY_ROUNDS_TO_STOP}`);
-      if (emptyRounds >= EMPTY_ROUNDS_TO_STOP) break;  // genuinely clear → done
-      // NB: do NOT reload here — GraphQL harvest already queried the server,
-      // so a reload would return the same empty result and could loop forever.
-      await sleep(ROUND_GAP);
-      continue;
-    }
+      window.scrollTo(0, document.documentElement.scrollHeight);
+      await sleep(SCROLL_GAP);
+      // a nudge back up then down helps Facebook trigger the next page
+      window.scrollBy(0, -200); await sleep(300);
+      window.scrollTo(0, document.documentElement.scrollHeight); await sleep(400);
 
-    emptyRounds = 0;
+      const afterH = document.documentElement.scrollHeight;
+      const afterN = document.querySelectorAll('[aria-label^="Actions for this post"]:not([data-wiper-tried])').length;
 
-    // 2) Delete each harvested post — serially, with human-like jitter.
-    let rateLimitHit = false;
-    for (const post of posts) {
-      if (!S.running) break;
-
-      const r = await deleteViaGraphQL(post, tok);
-
-      if (r.ok) {
-        S.deleted++; S.sessionDeleted++; deletedSinceReload++;
-        consecutiveFail = 0; backoff = 0;
-        logLine(`🗑 ${post.postId} (total ${S.deleted})`);
-        await save(); notify('PROGRESS');
-        await sleep(jitter(DELETE_MIN_GAP, DELETE_MAX_GAP));
-        continue;
-      }
-
-      if (r.rateLimited) {
-        backoff = Math.min(backoff ? backoff * 2 : 30000, MAX_BACKOFF);
-        S.lastError = `Rate limited — pausing ${Math.round(backoff / 1000)}s`;
-        logLine(`⏳ rate limited, backoff ${Math.round(backoff / 1000)}s`);
-        notify('PROGRESS');
-        await sleep(backoff);
-        rateLimitHit = true;
-        break; // re-harvest with a fresh token after backoff
-      }
-
-      // GraphQL refused this specific post — try the DOM path once.
-      const dom = await deleteViaDOM();
-      if (dom.ok) {
-        S.deleted++; S.sessionDeleted++; deletedSinceReload++;
-        consecutiveFail = 0;
-        logLine(`🗑 ${post.postId} via dom (total ${S.deleted})`);
-        await save(); notify('PROGRESS');
-        await sleep(jitter(DELETE_MIN_GAP, DELETE_MAX_GAP));
+      totalScrolls++;
+      if (afterN > beforeN) {
+        scrollStrikes = 0;            // a real new post appeared — keep pulling
+      } else if (afterH > beforeH + 80) {
+        scrollStrikes = 0;            // page grew (maybe just comments) — keep pulling a bit
       } else {
-        consecutiveFail++;
-        S.skip.add(post.storyId);
-        logLine(`⚠ skipped ${post.postId} (${S.lastError})`);
-        await save();
-        // A burst of failures usually means a stale fb_dtsg — refresh it.
-        if (consecutiveFail >= 5) { await reloadToRefresh('delete failures'); return; }
+        scrollStrikes++;
       }
+      // End the pass when the feed depth is exhausted OR we've scrolled a lot —
+      // either way reload to let Facebook re-render the next batch from the top.
+      if (scrollStrikes > MAX_SCROLL_STRIKES || totalScrolls >= MAX_SCROLLS_PER_PASS) break;
+      continue;
     }
 
-    // Periodically reload to refresh fb_dtsg on long (multi-day) runs.
-    if (!rateLimitHit && deletedSinceReload >= 120) {
-      await reloadToRefresh('token refresh');
-      return;
+    // 'system-post' = no Remove/Delete option (created group / renamed / joined
+    // / pinned announcement). It genuinely can't be deleted — skip quietly and
+    // count it as progress, NOT as a failure.
+    if (res.reason === 'system-post') {
+      logLine('· skipped a system post (not deletable)');
+      scrollStrikes = 0;
+      await sleep(500);
+      continue;
     }
 
-    await sleep(ROUND_GAP);
-  }
-
-  S.running = false;
-  await save();
-
-  if (emptyRounds >= EMPTY_ROUNDS_TO_STOP) {
-    logLine(`✓ done — feed clear. Total ${S.deleted}` + (S.skip.size ? `, ${S.skip.size} skipped` : ''));
-    notify('DONE');
-  } else {
-    logLine(`⏸ paused at ${S.deleted}`);
-    notify('PROGRESS');
+    // Any other reason (menu-did-not-open / no-confirm / dialog-stayed-open) is
+    // a TRANSIENT miss — almost always Facebook rate-limiting after many fast
+    // deletes. The post is still there, so this must NOT be read as "clear".
+    // Slow down (adaptive backoff) and move on; the post is retried next pass.
+    S.passFailures++;
+    consecutiveFails++;
+    S.failBackoff = Math.min(S.failBackoff + FAIL_BACKOFF_STEP, FAIL_BACKOFF_MAX);
+    S.lastError = 'Facebook is slowing deletions — backing off';
+    logLine(`⚠ could not remove a post [${res.reason || '?'}] — slowing down`);
+    if (consecutiveFails >= 8) break;     // end pass; mainLoop reloads + cools down
+    await sleep(1500 + S.failBackoff);
   }
 }
 
-// ─── Message handlers (from popup) ──────────────────────────────────────────
+// ─── Main controller: passes + reloads until the feed is genuinely clear ──────
+async function mainLoop() {
+  S.running = true;
+  S.done = false;
+  await save();
+  notify('PROGRESS');
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  await runPass();
+
+  if (!S.running) {                      // paused mid-pass by the user
+    await save();
+    logLine(`⏸ paused at ${S.deleted}`);
+    notify('PROGRESS');
+    return;
+  }
+
+  // ── Decide what this pass means ──
+  if (S.passDeleted > 0) {
+    // Real progress → keep going.
+    S.emptyPasses = 0;
+    S.stuckPasses = 0;
+    logLine(`— pass: removed ${S.passDeleted}, continuing`);
+  } else if (S.passFailures > 0) {
+    // Deleted nothing, but posts ARE there and kept failing (rate-limit). The
+    // feed is NOT clear — cool down and retry. Bail out only after many such
+    // passes so we never loop forever on a permanently-stuck post.
+    S.emptyPasses = 0;
+    S.stuckPasses++;
+    logLine(`— pass: 0 removed but ${S.passFailures} blocked (rate-limit ${S.stuckPasses}/${STUCK_PASSES_LIMIT})`);
+    if (S.stuckPasses >= STUCK_PASSES_LIMIT) {
+      S.running = false;
+      S.done = false;
+      S.lastError = 'Facebook is rate-limiting. Some posts remain — press Start later to resume.';
+      await save();
+      logLine('⏸ paused — Facebook is rate-limiting. Wait a while, then press Start to resume.');
+      notify('PROGRESS');
+      return;
+    }
+  } else {
+    // Nothing removable at all (only system posts / empty feed).
+    S.emptyPasses++;
+    logLine(`— pass: nothing removable (empty streak ${S.emptyPasses}/${EMPTY_PASSES_TO_STOP})`);
+    if (S.emptyPasses >= EMPTY_PASSES_TO_STOP) {
+      S.running = false;
+      S.done = true;
+      await save();
+      logLine(`✓ done — feed clear. Total removed: ${S.deleted}`);
+      notify('DONE');
+      return;
+    }
+  }
+
+  // Cool-down grows while rate-limited so Facebook can recover before we reload.
+  const cooldown = 700 + S.stuckPasses * 15000;
+  await save();
+  logLine(S.stuckPasses > 0 ? `↻ cooling down ${Math.round(cooldown/1000)}s, then retrying` : '↻ reloading for next pass');
+  await sleep(cooldown);
+  location.reload();
+}
+
+// ─── Messages from the popup ──────────────────────────────────────────────────
+chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
   if (msg.type === 'START') {
+    if (msg.speed) applySpeed(msg.speed);
     if (!S.running) {
-      S.running = true;
-      S.deleted = msg.deleted || S.deleted || 0;
-      S.sessionDeleted = 0;
+      if (typeof msg.deleted === 'number') S.deleted = msg.deleted;
+      S.emptyPasses = 0;          // a fresh Start re-verifies the whole feed
+      S.stuckPasses = 0;          // and resets any prior rate-limit cooldown
+      S.failBackoff = 0;
       S.lastError = '';
+      S.done = false;
       mainLoop();
     }
     sendResponse({ ok: true, deleted: S.deleted });
     return true;
   }
-  if (msg.type === 'STOP') {
-    S.running = false;
-    save();
-    sendResponse({ ok: true, deleted: S.deleted });
-    return true;
-  }
-  if (msg.type === 'STATUS') {
-    sendResponse({ running: S.running, deleted: S.deleted, lastError: S.lastError });
-    return true;
-  }
+  if (msg.type === 'SPEED')  { applySpeed(msg.speed); sendResponse({ ok: true }); return true; }
+  if (msg.type === 'STOP')   { S.running = false; save(); sendResponse({ ok: true, deleted: S.deleted }); return true; }
+  if (msg.type === 'STATUS') { sendResponse({ running: S.running, deleted: S.deleted, lastError: S.lastError }); return true; }
 });
 
-// ─── Auto-resume after a reload / browser restart ───────────────────────────
-
+// ─── Auto-resume after a reload / browser restart ─────────────────────────────
 (async () => {
-  const data = await new Promise(res => chrome.storage.local.get([STORAGE_KEY, SKIP_KEY], res));
+  const data = await new Promise(res => chrome.storage.local.get([STORAGE_KEY, SPEED_KEY], res));
   const saved = data[STORAGE_KEY] || {};
-  S.deleted = saved.deleted || 0;
-  S.skip = new Set(data[SKIP_KEY] || []);
+  S.deleted     = saved.deleted     || 0;
+  S.emptyPasses = saved.emptyPasses || 0;
+  S.stuckPasses = saved.stuckPasses || 0;
+  applySpeed(data[SPEED_KEY] || 'balanced');
 
   if (saved.running) {
-    await sleep(4000); // let the feed render first
-    S.running = true;
-    S.sessionDeleted = 0;
+    await sleep(POST_RELOAD_SETTLE);   // let the feed render first
     mainLoop();
   }
 })();

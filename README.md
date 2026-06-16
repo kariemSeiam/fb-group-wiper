@@ -1,6 +1,6 @@
-# FB Group Post Wiper
+# Group Post Wiper
 
-A Chrome/Brave extension that deletes **every post** from a Facebook group you admin — automatically, in the background, for as long as it takes. Built for old groups with years of history (2014+) and tens of thousands of posts.
+A Chrome/Brave extension that deletes **every post** from a Facebook group you admin — **any post type, any date** — automatically, in the background, for as long as it takes. Built for old groups with years of history and tens of thousands of posts.
 
 Install once, click **Start**, walk away. It survives browser restarts and resumes exactly where it left off.
 
@@ -8,14 +8,14 @@ Install once, click **Start**, walk away. It survives browser restarts and resum
 
 ## How it works (the short version)
 
-Most "delete all" scripts click through the on-screen menu for each post. That's slow and fragile — it breaks whenever a menu is a fraction of a second slow to appear (this is the "it skips posts" problem).
+Most "delete all" scripts click through the on-screen menu for each post. That's slow and fragile — it breaks whenever a menu is a fraction of a second slow to appear (the "it skips posts" problem).
 
 This extension instead talks to Facebook the same way Facebook's own website does:
 
 1. **Harvest** — asks the group feed for the current batch of posts (a direct data request, no scrolling).
 2. **Delete** — sends the exact same "remove post" request the *Remove post → Confirm* button sends, one post at a time.
-3. **Repeat** — deleting a post pulls the next-oldest into view, so it keeps draining the group from the top down. It never needs to scroll back to 2014.
-4. **Fallback** — if a particular post can't be removed that way (some old shared/system posts), it clicks through the real menu like a human, with proper waiting (no more skips).
+3. **Repeat** — deleting a post pulls the next-oldest into view, so it keeps draining the group from the top down. It works through the whole history regardless of how old the posts are — no need to scroll back years.
+4. **Fallback** — if a particular post type resists that request (some old shared/system posts), it clicks through the real menu like a human, with proper waiting (no more skips).
 
 It also re-reads Facebook's security token periodically so multi-day runs don't silently break, and it logs everything so you can see exactly what happened.
 
@@ -43,13 +43,24 @@ Pin the icon from the puzzle-piece menu so you can watch progress.
 
 1. Log into Facebook in the same browser.
 2. Open your group: `facebook.com/groups/YOUR-GROUP`
-3. Click the **FB Group Post Wiper** icon.
-4. Click **🗑️ Start Wiping**.
-5. Minimize the window and leave it running.
+3. Click the **Group Post Wiper** icon.
+4. (Optional) pick a **Speed** — *Safe*, *Balanced* (default), or *Fast*.
+5. Click **🗑️ Start Wiping**.
+6. Minimize the window and leave it running.
 
 The toolbar icon shows a live **count badge**. Open the popup any time to see the counter, current status, and the **Activity log**.
 
 > **Leave the Facebook tab open.** You can minimize the whole window, but don't close that tab. The extension may refresh the page by itself occasionally — that's normal (it keeps Facebook's session fresh).
+
+### Speed
+
+| Mode | Pace | When to use |
+|------|------|-------------|
+| **Safe** | slowest | An account you really care about; overnight runs. |
+| **Balanced** | default | Recommended for almost everyone. |
+| **Fast** | quickest | Smaller groups, or an account you're not worried about. Higher chance Facebook tells it to slow down (it will back off automatically). |
+
+You can change speed mid-run — it applies to the next post.
 
 ---
 
@@ -124,4 +135,4 @@ Everything runs locally in your browser using your own logged-in session. No dat
 
 ## Uninstall
 
-`chrome://extensions` → **FB Group Post Wiper** → **Remove**. Your group is unaffected.
+`chrome://extensions` → **Group Post Wiper** → **Remove**. Your group is unaffected.

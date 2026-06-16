@@ -1,13 +1,25 @@
 {
   "manifest_version": 3,
-  "name": "FB Group Post Wiper",
-  "version": "2.0.0",
-  "description": "Bulk delete all posts from any Facebook group you admin. GraphQL-powered, account-safe pacing, resumes across restarts.",
+  "name": "Group Post Wiper",
+  "version": "3.0.0",
+  "description": "Delete every post from a Facebook group you admin — any type, any date. Account-safe pacing, auto-resume across restarts.",
   "permissions": ["storage", "tabs"],
   "host_permissions": ["https://www.facebook.com/*"],
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "FB Group Post Wiper"
+    "default_title": "Group Post Wiper",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
   },
   "content_scripts": [
     {

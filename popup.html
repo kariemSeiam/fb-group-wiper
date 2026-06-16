@@ -1,210 +1,347 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <title>FB Group Post Wiper</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+<meta charset="utf-8">
+<title>Group Post Wiper</title>
+<style>
+  :root {
+    --bg: #0a0b0d;
+    --panel: #111317;
+    --panel-2: #15181d;
+    --line: #20242b;
+    --text: #e7ebf0;
+    --muted: #7a828e;
+    --faint: #4a515c;
+    --accent: #2be07a;
+    --accent-bright: #5cff9d;
+    --accent-dim: #1aa258;
+    --danger: #ff5a52;
+    --warn: #f5a524;
+  }
 
-    body {
-      width: 300px;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #0f0f0f;
-      color: #e0e0e0;
-      padding: 20px;
-    }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
 
-    .header {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-bottom: 20px;
-    }
+  body {
+    width: 340px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
 
-    .header h1 {
-      font-size: 13px;
-      font-weight: 600;
-      color: #888;
-      text-transform: uppercase;
-      letter-spacing: 1.2px;
-    }
+  /* ── ambient glow ── */
+  .app {
+    position: relative;
+    padding: 18px 18px 16px;
+  }
+  .app::before {
+    content: '';
+    position: absolute;
+    top: -60px; left: 50%;
+    width: 240px; height: 160px;
+    transform: translateX(-50%);
+    background: radial-gradient(ellipse at center, rgba(43,224,122,0.18), transparent 70%);
+    pointer-events: none;
+  }
 
-    .dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: #333;
-      transition: background 0.3s;
-    }
-    .dot.active {
-      background: #e74c3c;
-      box-shadow: 0 0 6px #e74c3c88;
-      animation: pulse 1.4s infinite;
-    }
+  /* ── header ── */
+  .header {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    margin-bottom: 18px;
+    position: relative;
+  }
+  .logo {
+    width: 34px; height: 34px;
+    flex: none;
+    filter: drop-shadow(0 0 8px rgba(43,224,122,0.35));
+  }
+  .brand { line-height: 1.1; }
+  .brand .name {
+    font-size: 15px;
+    font-weight: 800;
+    letter-spacing: 2px;
+    background: linear-gradient(90deg, #eafff2, var(--accent));
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .brand .sub {
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 0.6px;
+    margin-top: 1px;
+  }
+  .ver {
+    margin-left: auto;
+    font-size: 9.5px;
+    color: var(--faint);
+    border: 1px solid var(--line);
+    padding: 2px 7px;
+    border-radius: 20px;
+    letter-spacing: 0.5px;
+  }
 
-    @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.4; }
-    }
+  /* ── hero counter ── */
+  .hero {
+    background: linear-gradient(180deg, var(--panel), var(--panel-2));
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 18px 16px 16px;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+  }
+  .hero .ring {
+    position: absolute; inset: 0;
+    background: radial-gradient(circle at 50% 0%, rgba(43,224,122,0.10), transparent 60%);
+    pointer-events: none;
+  }
+  .counter {
+    font-size: 50px;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -1px;
+    font-variant-numeric: tabular-nums;
+    color: var(--accent-bright);
+    text-shadow: 0 0 22px rgba(43,224,122,0.35);
+    transition: color .3s;
+  }
+  .counter.done { color: var(--accent); }
+  .counter.idle { color: var(--text); text-shadow: none; }
+  .counter-label {
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-top: 7px;
+  }
 
-    .counter-block {
-      text-align: center;
-      margin: 8px 0 20px;
-    }
+  /* ── status pill ── */
+  .status {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    margin-top: 14px;
+    padding: 6px 13px;
+    border-radius: 20px;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    font-size: 11.5px;
+    color: var(--muted);
+    max-width: 100%;
+  }
+  .status .text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--faint); flex: none;
+  }
+  .status.run  { color: var(--accent-bright); border-color: rgba(43,224,122,0.3); }
+  .status.run  .dot { background: var(--accent); box-shadow: 0 0 7px var(--accent); animation: pulse 1.3s infinite; }
+  .status.done { color: var(--accent); border-color: rgba(43,224,122,0.3); }
+  .status.done .dot { background: var(--accent); }
+  .status.warn { color: var(--warn); border-color: rgba(245,165,36,0.3); }
+  .status.warn .dot { background: var(--warn); }
+  .status.err  { color: var(--danger); border-color: rgba(255,90,82,0.3); }
+  .status.err  .dot { background: var(--danger); }
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.35; } }
 
-    .counter {
-      font-size: 56px;
-      font-weight: 800;
-      color: #e74c3c;
-      line-height: 1;
-      font-variant-numeric: tabular-nums;
-      transition: color 0.2s;
-    }
+  /* ── primary action ── */
+  .actions { margin-top: 16px; }
+  .btn {
+    width: 100%;
+    padding: 13px;
+    border: none;
+    border-radius: 12px;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    transition: transform .08s, filter .15s, opacity .15s;
+  }
+  .btn:active { transform: scale(.985); }
+  .btn-start {
+    color: #04140b;
+    background: linear-gradient(180deg, var(--accent-bright), var(--accent));
+    box-shadow: 0 6px 18px rgba(43,224,122,0.25);
+  }
+  .btn-start:hover { filter: brightness(1.06); }
+  .btn-stop {
+    color: var(--text);
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+  }
+  .btn-stop:hover { border-color: #313742; filter: brightness(1.1); }
+  .btn svg { width: 16px; height: 16px; }
 
-    .counter.done { color: #2ecc71; }
+  /* ── speed selector ── */
+  .speed {
+    margin-top: 14px;
+  }
+  .speed-head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin-bottom: 7px;
+  }
+  .speed-head .lbl { font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); }
+  .speed-head .hint { font-size: 10px; color: var(--faint); }
+  .seg {
+    display: flex;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 3px;
+    gap: 3px;
+  }
+  .seg button {
+    flex: 1;
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    font-size: 11.5px;
+    font-weight: 600;
+    padding: 7px 0;
+    border-radius: 7px;
+    cursor: pointer;
+    transition: background .15s, color .15s;
+  }
+  .seg button:hover { color: var(--text); }
+  .seg button.on {
+    background: linear-gradient(180deg, rgba(43,224,122,0.18), rgba(43,224,122,0.08));
+    color: var(--accent-bright);
+    box-shadow: inset 0 0 0 1px rgba(43,224,122,0.3);
+  }
+  .seg-note {
+    font-size: 10px;
+    color: var(--faint);
+    margin-top: 7px;
+    text-align: center;
+    min-height: 13px;
+    transition: color .2s;
+  }
+  .seg-note.warn { color: var(--warn); }
 
-    .counter-label {
-      font-size: 10px;
-      color: #555;
-      letter-spacing: 1.5px;
-      text-transform: uppercase;
-      margin-top: 4px;
-    }
+  /* ── divider ── */
+  .divider { height: 1px; background: var(--line); margin: 16px 0 12px; }
 
-    .status {
-      font-size: 12px;
-      color: #777;
-      text-align: center;
-      min-height: 18px;
-      margin-bottom: 16px;
-      transition: color 0.2s;
-    }
+  /* ── log ── */
+  .logbar {
+    display: flex; align-items: center; justify-content: space-between;
+    cursor: pointer; user-select: none;
+  }
+  .logbar .t { font-size: 11px; color: var(--muted); letter-spacing: .4px; }
+  .logbar .t:hover { color: var(--text); }
+  .logbar .chev { font-size: 10px; color: var(--faint); transition: transform .2s; }
+  .logbar.open .chev { transform: rotate(90deg); }
+  .log {
+    margin-top: 9px;
+    background: #060708;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    padding: 9px 10px;
+    font: 10px/1.55 ui-monospace, 'SF Mono', Menlo, monospace;
+    color: var(--muted);
+    max-height: 150px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .log::-webkit-scrollbar { width: 7px; }
+  .log::-webkit-scrollbar-thumb { background: #23272e; border-radius: 4px; }
+  .hidden { display: none !important; }
 
-    .status.running { color: #e74c3c; }
-    .status.done    { color: #2ecc71; }
-    .status.warn    { color: #f39c12; }
-
-    .btn {
-      width: 100%;
-      padding: 12px;
-      border: none;
-      border-radius: 8px;
-      font-size: 14px;
-      font-weight: 700;
-      cursor: pointer;
-      letter-spacing: 0.3px;
-      transition: opacity 0.15s, transform 0.1s;
-    }
-
-    .btn:hover  { opacity: 0.88; }
-    .btn:active { transform: scale(0.98); }
-
-    #startBtn {
-      background: #e74c3c;
-      color: #fff;
-    }
-
-    #stopBtn {
-      background: #222;
-      color: #888;
-      margin-top: 8px;
-      border: 1px solid #333;
-    }
-
-    #resetBtn {
-      background: transparent;
-      color: #444;
-      font-size: 11px;
-      margin-top: 4px;
-      padding: 6px;
-      border: none;
-      text-decoration: underline;
-      cursor: pointer;
-    }
-    #resetBtn:hover { color: #777; }
-
-    .hidden { display: none !important; }
-
-    .divider {
-      height: 1px;
-      background: #1e1e1e;
-      margin: 16px 0;
-    }
-
-    .note {
-      font-size: 10px;
-      color: #444;
-      text-align: center;
-      line-height: 1.6;
-    }
-
-    .note a {
-      color: #555;
-      text-decoration: none;
-    }
-
-    .errline {
-      font-size: 11px;
-      color: #f39c12;
-      text-align: center;
-      min-height: 14px;
-      margin: -8px 0 14px;
-      word-break: break-word;
-    }
-
-    .logtoggle {
-      font-size: 11px;
-      color: #555;
-      cursor: pointer;
-      user-select: none;
-      margin-bottom: 8px;
-    }
-    .logtoggle:hover { color: #888; }
-
-    .log {
-      background: #060606;
-      border: 1px solid #1c1c1c;
-      border-radius: 6px;
-      padding: 8px;
-      font-size: 10px;
-      line-height: 1.5;
-      color: #888;
-      max-height: 160px;
-      overflow-y: auto;
-      white-space: pre-wrap;
-      font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-      margin-bottom: 14px;
-    }
-  </style>
+  /* ── footer / guidance ── */
+  .note {
+    margin-top: 13px;
+    font-size: 10.5px;
+    color: var(--faint);
+    text-align: center;
+    line-height: 1.6;
+  }
+  .note strong { color: var(--muted); }
+  .footer {
+    margin-top: 13px;
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 10px; color: var(--faint);
+  }
+  .footer a { color: var(--accent-dim); text-decoration: none; }
+  .footer a:hover { color: var(--accent); }
+</style>
 </head>
 <body>
+<div class="app">
+
   <div class="header">
-    <div class="dot" id="dot"></div>
-    <h1>Group Post Wiper</h1>
+    <svg class="logo" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="lf" x1="64" y1="20" x2="64" y2="108" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="#eafff2"/><stop offset=".55" stop-color="#7CFFB0"/><stop offset="1" stop-color="#21E07A"/>
+        </linearGradient>
+        <linearGradient id="ld" x1="64" y1="86" x2="64" y2="116" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="#43F58E"/><stop offset="1" stop-color="#16C268"/>
+        </linearGradient>
+      </defs>
+      <path d="M30 30 C41 27,52 31,64 58 C76 31,87 27,98 30 C92 47,82 64,70 80 C66 85,62 85,58 80 C46 64,36 47,30 30 Z" fill="url(#lf)"/>
+      <path d="M64 58 C60 49,56 43,50 39 C57 49,61 57,64 64 C67 57,71 49,78 39 C72 43,68 49,64 58 Z" fill="#0a0a0c" fill-opacity=".55"/>
+      <path d="M64 84 C67 90,70 95,70 101 C70 108,58 108,58 101 C58 95,61 90,64 84 Z" fill="url(#ld)"/>
+    </svg>
+    <div class="brand">
+      <div class="name">GROUP WIPER</div>
+      <div class="sub">Bulk-delete group posts</div>
+    </div>
+    <div class="ver" id="ver">v3.0</div>
   </div>
 
-  <div class="counter-block">
-    <div class="counter" id="counter">0</div>
+  <div class="hero">
+    <div class="ring"></div>
+    <div class="counter idle" id="counter">0</div>
     <div class="counter-label">Posts Deleted</div>
+    <div class="status" id="status"><span class="dot"></span><span class="text" id="statusText">Ready</span></div>
   </div>
 
-  <div class="status" id="status">Navigate to a Facebook group to start</div>
-  <div class="errline" id="errline"></div>
+  <div class="actions">
+    <button class="btn btn-start" id="startBtn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+      Start Wiping
+    </button>
+    <button class="btn btn-stop hidden" id="stopBtn">
+      <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
+      Pause
+    </button>
+  </div>
 
-  <button class="btn" id="startBtn">🗑️ &nbsp;Start Wiping</button>
-  <button class="btn hidden" id="stopBtn">⏸ &nbsp;Pause</button>
-  <button id="resetBtn" class="hidden">Reset counter</button>
+  <div class="speed">
+    <div class="speed-head">
+      <span class="lbl">Speed</span>
+      <span class="hint">how fast it deletes</span>
+    </div>
+    <div class="seg" id="seg">
+      <button data-speed="safe">Safe</button>
+      <button data-speed="balanced" class="on">Balanced</button>
+      <button data-speed="fast">Fast</button>
+    </div>
+    <div class="seg-note" id="segNote">Steady pace — recommended for most groups.</div>
+  </div>
 
   <div class="divider"></div>
 
-  <div class="logtoggle" id="logToggle">▸ Activity log</div>
+  <div class="logbar" id="logBar"><span class="t">Activity log</span><span class="chev">▸</span></div>
   <pre class="log hidden" id="log"></pre>
 
   <div class="note" id="note">
-    You must be on a <strong>facebook.com/groups/...</strong> page<br>
-    and be an <strong>admin</strong> of that group.
+    Open a <strong>facebook.com/groups/…</strong> page where you are an <strong>admin</strong>, then press Start.
   </div>
 
-  <script src="popup.js"></script>
+  <div class="footer">
+    <span>Runs locally · your session only</span>
+    <a id="reset" href="#">Reset</a>
+  </div>
+
+</div>
+<script src="popup.js"></script>
 </body>
 </html>
