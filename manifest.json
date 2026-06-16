@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "FB Group Post Wiper",
+  "version": "1.0.0",
+  "description": "Bulk delete all posts from any Facebook group you admin. Runs automatically, resumes across restarts.",
+  "permissions": ["storage", "tabs"],
+  "host_permissions": ["https://www.facebook.com/*"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "FB Group Post Wiper"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.facebook.com/groups/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  }
+}
