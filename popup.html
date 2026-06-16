@@ -142,6 +142,39 @@
       color: #555;
       text-decoration: none;
     }
+
+    .errline {
+      font-size: 11px;
+      color: #f39c12;
+      text-align: center;
+      min-height: 14px;
+      margin: -8px 0 14px;
+      word-break: break-word;
+    }
+
+    .logtoggle {
+      font-size: 11px;
+      color: #555;
+      cursor: pointer;
+      user-select: none;
+      margin-bottom: 8px;
+    }
+    .logtoggle:hover { color: #888; }
+
+    .log {
+      background: #060606;
+      border: 1px solid #1c1c1c;
+      border-radius: 6px;
+      padding: 8px;
+      font-size: 10px;
+      line-height: 1.5;
+      color: #888;
+      max-height: 160px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+      margin-bottom: 14px;
+    }
   </style>
 </head>
 <body>
@@ -156,12 +189,17 @@
   </div>
 
   <div class="status" id="status">Navigate to a Facebook group to start</div>
+  <div class="errline" id="errline"></div>
 
   <button class="btn" id="startBtn">🗑️ &nbsp;Start Wiping</button>
   <button class="btn hidden" id="stopBtn">⏸ &nbsp;Pause</button>
   <button id="resetBtn" class="hidden">Reset counter</button>
 
   <div class="divider"></div>
+
+  <div class="logtoggle" id="logToggle">▸ Activity log</div>
+  <pre class="log hidden" id="log"></pre>
+
   <div class="note" id="note">
     You must be on a <strong>facebook.com/groups/...</strong> page<br>
     and be an <strong>admin</strong> of that group.

@@ -1,6 +1,11 @@
 const STORAGE_KEY = 'fbwiper';
+const LOG_KEY = 'fbwiper_log';
 
 const $ = id => document.getElementById(id);
+
+function showError(msg) {
+  $('errline').textContent = msg || '';
+}
 
 // ─── UI helpers ─────────────────────────────────────────────────────────────
 
@@ -29,6 +34,7 @@ function setStopped(deleted) {
   $('note').textContent     = count > 0
     ? 'Progress saved. Will resume where it left off.'
     : 'You must be on a facebook.com/groups/… page and be an admin.';
+  showError('');
 }
 
 function setDone(deleted) {
@@ -41,6 +47,7 @@ function setDone(deleted) {
   $('startBtn').classList.remove('hidden');
   $('stopBtn').classList.add('hidden');
   $('resetBtn').classList.remove('hidden');
+  showError('');
 }
 
 function setWarn(msg) {
@@ -114,8 +121,28 @@ $('stopBtn').addEventListener('click', async () => {
 
 $('resetBtn').addEventListener('click', async () => {
   await chrome.storage.local.set({ [STORAGE_KEY]: { running: false, deleted: 0 } });
+  await chrome.storage.local.remove(['fbwiper_log', 'fbwiper_skip']);
+  $('log').textContent = '(nothing yet)';
   setStopped(0);
 });
+
+// ─── Activity log toggle ────────────────────────────────────────────────────
+
+let logOpen = false;
+
+$('logToggle').addEventListener('click', async () => {
+  logOpen = !logOpen;
+  $('log').classList.toggle('hidden', !logOpen);
+  $('logToggle').textContent = (logOpen ? '▾' : '▸') + ' Activity log';
+  if (logOpen) await refreshLog();
+});
+
+async function refreshLog() {
+  const data = await chrome.storage.local.get(LOG_KEY);
+  const lines = data[LOG_KEY] || [];
+  $('log').textContent = lines.length ? lines.slice(-60).join('\n') : '(nothing yet)';
+  $('log').scrollTop = $('log').scrollHeight;
+}
 
 // ─── Live updates (poll storage every 1.5s while popup is open) ─────────────
 
@@ -128,5 +155,7 @@ setInterval(async () => {
 
   if (data.running) {
     $('dot').className = 'dot active';
+    showError(data.lastError || '');
   }
+  if (logOpen) refreshLog();
 }, 1500);

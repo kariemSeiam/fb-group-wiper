@@ -1,110 +1,127 @@
 # FB Group Post Wiper
 
-A Chrome extension that deletes **all posts** from any Facebook group you admin — automatically, in the background, for as long as it takes.
+A Chrome/Brave extension that deletes **every post** from a Facebook group you admin — automatically, in the background, for as long as it takes. Built for old groups with years of history (2014+) and tens of thousands of posts.
 
-Built for groups with years of history (2014+). Handles thousands of posts, survives browser restarts, and picks up exactly where it left off.
+Install once, click **Start**, walk away. It survives browser restarts and resumes exactly where it left off.
+
+---
+
+## How it works (the short version)
+
+Most "delete all" scripts click through the on-screen menu for each post. That's slow and fragile — it breaks whenever a menu is a fraction of a second slow to appear (this is the "it skips posts" problem).
+
+This extension instead talks to Facebook the same way Facebook's own website does:
+
+1. **Harvest** — asks the group feed for the current batch of posts (a direct data request, no scrolling).
+2. **Delete** — sends the exact same "remove post" request the *Remove post → Confirm* button sends, one post at a time.
+3. **Repeat** — deleting a post pulls the next-oldest into view, so it keeps draining the group from the top down. It never needs to scroll back to 2014.
+4. **Fallback** — if a particular post can't be removed that way (some old shared/system posts), it clicks through the real menu like a human, with proper waiting (no more skips).
+
+It also re-reads Facebook's security token periodically so multi-day runs don't silently break, and it logs everything so you can see exactly what happened.
 
 ---
 
 ## Install (2 minutes)
 
-### Step 1 — Download
-Click the green **Code** button → **Download ZIP** → unzip anywhere on your computer.
+### 1. Download
+Green **Code** button → **Download ZIP** → unzip anywhere. (Or `git clone`.)
 
-### Step 2 — Open Chrome Extensions
-Open Chrome and go to: `chrome://extensions`
+### 2. Open Extensions
+In Chrome or Brave, go to: `chrome://extensions`
 
-### Step 3 — Enable Developer Mode
-Toggle **Developer mode** ON (top-right corner).
+### 3. Enable Developer Mode
+Toggle **Developer mode** ON (top-right).
 
-### Step 4 — Load the Extension
-Click **Load unpacked** → select the unzipped folder (`fb-group-wiper`).
+### 4. Load it
+Click **Load unpacked** → select the unzipped **`fb-group-wiper`** folder.
 
-The extension icon appears in your Chrome toolbar (puzzle piece icon → pin it).
-
----
-
-## How to Use
-
-1. Log into Facebook
-2. Go to your group: `facebook.com/groups/YOUR_GROUP_NAME`
-3. Click the **FB Group Post Wiper** icon in Chrome toolbar
-4. Click **🗑️ Start Wiping**
-5. Walk away
-
-The extension runs in the background. You can minimize the browser window. It will keep deleting posts until the feed is empty, then stop automatically.
+Pin the icon from the puzzle-piece menu so you can watch progress.
 
 ---
 
-## Progress
+## How to use
 
-The popup shows a live counter. Close it anytime — the count is saved.
+1. Log into Facebook in the same browser.
+2. Open your group: `facebook.com/groups/YOUR-GROUP`
+3. Click the **FB Group Post Wiper** icon.
+4. Click **🗑️ Start Wiping**.
+5. Minimize the window and leave it running.
 
-If you close Chrome and reopen it, just go back to the group page and the extension **auto-resumes** from where it stopped.
+The toolbar icon shows a live **count badge**. Open the popup any time to see the counter, current status, and the **Activity log**.
 
-To check progress anytime: click the extension icon.
-
----
-
-## Pause & Resume
-
-- Click **⏸ Pause** to stop at any point
-- Click **🗑️ Start Wiping** again to resume from the same count
-- Click **Reset counter** to start fresh (doesn't affect Facebook — just resets the displayed number)
+> **Leave the Facebook tab open.** You can minimize the whole window, but don't close that tab. The extension may refresh the page by itself occasionally — that's normal (it keeps Facebook's session fresh).
 
 ---
 
-## Requirements
+## It runs for as long as it takes
 
-- Chrome browser
-- You must be an **admin or moderator** of the group
-- Must be logged into Facebook in Chrome
-- Keep the Facebook group tab open (can be minimized)
+This is built for **slow, safe, unattended** runs:
 
----
+- Posts are deleted **one at a time**, with a few seconds of randomized spacing between each. This is deliberate — see *Account safety* below.
+- Roughly **3–4 seconds per post**:
 
-## How Long Does It Take?
+| Posts   | Approx. time |
+|---------|--------------|
+| 1,000   | ~1 hour      |
+| 10,000  | ~10–12 hours |
+| 50,000  | ~2–3 days    |
 
-Each post takes about 3–4 seconds (menu → confirm → wait). Rough estimates:
-
-| Posts | Time |
-|-------|------|
-| 500   | ~30 min |
-| 2,000 | ~2 hours |
-| 10,000 | ~10 hours |
-| 50,000 | ~2 days |
-
-For very old groups, let it run overnight. It will finish.
+For a big old group, start it and let it run overnight / over a couple of days. If you close the browser, just reopen it and go back to the group page — it **auto-resumes**.
 
 ---
 
-## Notes
+## Account safety (please read)
 
-- **Members are NOT affected** — only posts are deleted
-- Works with both English and Arabic Facebook UI
-- Handles your own posts ("Delete post") and others' posts ("Remove post")
-- Very old posts may take multiple passes to surface — the extension handles this automatically with scroll + reload cycles
+This tool is intentionally **not** "as fast as possible." Deleting hundreds of posts per minute is exactly what trips Facebook's automated-abuse limits, which can temporarily restrict the account doing it. On an account you care about, that's not worth shaving a few hours.
+
+So it deletes **serially with human-like timing**, and if Facebook ever signals "slow down," it automatically **backs off and waits** (you'll see this in the log), then continues. Let it take its time.
+
+Only run this on a group where you are an **admin** (or moderator with remove rights).
+
+---
+
+## Pause, resume, reset
+
+- **⏸ Pause** — stops cleanly. Click **Start** again to continue from the same count.
+- **Auto-resume** — after a browser restart, open the group page; it picks up on its own.
+- **Reset counter** — sets the displayed number back to 0 and clears the log/skip list. (Doesn't touch Facebook — only the extension's own counters.)
+
+---
+
+## What gets deleted / what doesn't
+
+- ✅ All normal member and admin posts in the group feed.
+- ✅ Your own posts and other people's posts.
+- ✅ Works with English and Arabic Facebook.
+- ❌ **Members are not affected** — only posts.
+- A small number of unusual/system posts may resist deletion; these are recorded in the **skip list** and reported at the end instead of blocking the run.
+
+---
+
+## Honest note on "all" posts
+
+The extension drains the group feed from the top and keeps going until several consecutive checks come back empty. For normal groups this reaches everything. For an extremely large, very old group, watch the first hour and check the **Activity log** — it shows every post id it deletes and any it skips, so you can confirm it's making steady progress and see immediately if it ever stalls. The log + resume mean a multi-day run is always recoverable.
 
 ---
 
 ## Troubleshooting
 
-**Button says "Go to a Facebook group first"**
-→ Make sure you're on `facebook.com/groups/your-group` before clicking Start
+| Problem | Fix |
+|---|---|
+| "Go to a Facebook group first" | Be on `facebook.com/groups/…` before clicking Start. |
+| Counter not moving | Open the Activity log. If it says *rate limited*, that's normal — it's waiting and will resume. |
+| "Reading page… reload the group" | Refresh the group page (F5); it will continue. |
+| Nothing deletes at all | Make sure you're an **admin** of the group, and logged in. |
+| Stopped after closing browser | Reopen the browser, go to the group page — it resumes automatically. |
 
-**Extension stops early**
-→ Click Start again — it will resume. Facebook sometimes pauses the feed.
+---
 
-**"Reload the Facebook page, then try again"**
-→ Refresh the group page (F5), then click Start
+## Privacy
 
-**Posts not deleting**
-→ Make sure you are an admin of the group (not just a member)
+Everything runs locally in your browser using your own logged-in session. No data is sent anywhere except to Facebook (the same requests the website itself makes). There is no server, no tracking, no account collection.
 
 ---
 
 ## Uninstall
 
-Go to `chrome://extensions` → find **FB Group Post Wiper** → click **Remove**.
-
-Your Facebook group is not affected by uninstalling.
+`chrome://extensions` → **FB Group Post Wiper** → **Remove**. Your group is unaffected.
